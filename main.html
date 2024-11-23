@@ -1,0 +1,166 @@
+<!-- <!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Conexión WhatsApp - QR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+
+      // Manejo de eventos del socket
+      socket.on("qr", (qrCodeURL) => {
+        const qrContainer = document.getElementById("qr-container");
+        qrContainer.innerHTML = `<img src="${qrCodeURL}" alt="Código QR" class="rounded-lg mx-auto mb-4" />`;
+
+        const downloadButton = document.getElementById("download-btn");
+        downloadButton.classList.remove("hidden");
+        downloadButton.onclick = () => {
+          const link = document.createElement("a");
+          link.href = qrCodeURL;
+          link.download = "whatsapp_qr.png";
+          link.click();
+        };
+      });
+
+      socket.on("connected", () => {
+        updateStatus("Conexión establecida exitosamente.", "text-green-500");
+      });
+
+      socket.on("logout", () => {
+        updateStatus(
+          "Sesión cerrada. Escanee el QR nuevamente.",
+          "text-red-500"
+        );
+        clearQRCode();
+      });
+
+      socket.on("updateCounters", (contador) => {
+        const mensajesContainer = document.getElementById("mensajes-container");
+        mensajesContainer.innerHTML = `
+          <p><strong>Enviados:</strong> ${contador.enviados}</p>
+          <p><strong>Recibidos:</strong> ${contador.recibidos}</p>
+        `;
+      });
+
+      socket.on("messageData", (message) => {
+        const { from, number, messageText, timestamp, isSent } = message;
+        const date = new Date(timestamp * 1000).toLocaleDateString();
+        const time = new Date(timestamp * 1000).toLocaleTimeString();
+        const mensajesList = document.getElementById("mensajes-list");
+        const messageItem = document.createElement("li");
+        messageItem.classList.add("border-b", "py-2");
+        messageItem.innerHTML = ` 
+          <strong>${isSent ? "Enviado a" : "Recibido de"}:</strong> ${
+          from || "Desconocido"
+        } (${number})<br>
+          <small>${date} - ${time}</small><br>
+          <span><strong>Mensaje:</strong> ${
+            messageText || "Sin contenido"
+          }</span>
+        `;
+        mensajesList.appendChild(messageItem);
+      });
+
+      const updateStatus = (message, className) => {
+        const statusContainer = document.getElementById("status-container");
+        statusContainer.innerHTML = `<p class="${className}">${message}</p>`;
+      };
+
+      const clearQRCode = () => {
+        document.getElementById("qr-container").innerHTML = "";
+        document.getElementById("download-btn").classList.add("hidden");
+      };
+
+      const downloadChatInfo = () => {
+        // Crear un enlace para descargar el archivo JSON desde el servidor
+        const link = document.createElement("a");
+        link.href = "/download-messages"; // Ruta del servidor
+        link.download = "messages_grouped_log.json";
+        link.click();
+      };
+
+      const downloadExcelInfo = () => {
+        // Crear un enlace para descargar el archivo Excel desde el servidor
+        const link = document.createElement("a");
+        link.href = "/download-excel"; // Ruta del servidor para el archivo Excel
+        link.download = "messages_log.xlsx";
+        link.click();
+      };
+
+      function clearLog() {
+        if (
+          confirm(
+            "¿Estás seguro de que quieres eliminar todo el historial de mensajes?"
+          )
+        ) {
+          fetch("/clear-messages-log", { method: "POST" })
+            .then((response) => {
+              if (response.ok) {
+                alert("Historial eliminado exitosamente.");
+                // Opcional: Actualizar los contadores en la interfaz
+                document.getElementById("sentCount").textContent = "0";
+                document.getElementById("receivedCount").textContent = "0";
+              } else {
+                alert("Error al eliminar el historial.");
+              }
+            })
+            .catch((error) => console.error("Error:", error));
+        }
+      }
+
+      const closeSession = () => socket.emit("closeConnection");
+      const reconnect = () => socket.emit("reconnect");
+    </script>
+  </head>
+  <body class="bg-gray-100 p-8">
+    <div class="max-w-3xl mx-auto bg-white p-6 rounded-lg shadow-lg">
+      <h1 class="text-2xl font-semibold text-center mb-4">Conexión WhatsApp</h1>
+      <div id="status-container" class="text-center mb-4"></div>
+      <div id="qr-container" class="text-center mb-4"></div>
+      <div id="mensajes-container" class="text-center mb-4"></div>
+      <ul id="mensajes-list" class="space-y-4"></ul>
+      <div class="text-center mt-4">
+        <button
+          id="download-btn"
+          class="bg-blue-500 text-white px-4 py-2 rounded"
+          onclick="downloadChatInfo()"
+        >
+          Descargar mensajes
+        </button>
+      </div>
+      <div class="text-center mt-4">
+        <button
+          class="bg-green-500 text-white px-4 py-2 rounded"
+          onclick="downloadExcelInfo()"
+        >
+          Descargar Excel
+        </button>
+      </div>
+      <div class="text-center mt-4">
+        <button
+          class="bg-green-500 text-white px-4 py-2 rounded"
+          id="clearLogButton"
+          onclick="clearLog()"
+        >
+          Eliminar historial
+        </button>
+      </div>
+      <div class="text-center mt-6">
+        <button
+          class="bg-red-500 text-white px-4 py-2 rounded"
+          onclick="closeSession()"
+        >
+          Cerrar sesión
+        </button>
+        <button
+          class="bg-green-500 text-white px-4 py-2 rounded ml-4"
+          onclick="reconnect()"
+        >
+          Reconectar
+        </button>
+      </div>
+    </div>
+  </body>
+</html> -->
