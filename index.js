@@ -40,7 +40,7 @@ const Message = mongoose.model("Message", messageSchema);
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Configuración de Express
 app.use(express.static("public"));
