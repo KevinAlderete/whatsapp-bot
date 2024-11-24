@@ -185,12 +185,15 @@ async function handleMessageUpsert(messageUpdate) {
         phoneNumber,
         message: messageContent,
         timestamp: messageTimestamp || Date.now() / 1000,
-        date: new Date(
-          (messageTimestamp || Date.now() / 1000) * 1000
-        ).toLocaleDateString(),
-        time: new Date(
-          (messageTimestamp || Date.now() / 1000) * 1000
-        ).toLocaleTimeString(),
+        date: new Intl.DateTimeFormat("es-PE", {
+          timeZone: "America/Lima",
+        }).format(new Date((messageTimestamp || Date.now() / 1000) * 1000)),
+        time: new Intl.DateTimeFormat("es-PE", {
+          timeZone: "America/Lima",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).format(new Date((messageTimestamp || Date.now() / 1000) * 1000)),
       };
 
       await Message.create(messageData);
