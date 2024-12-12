@@ -5,6 +5,7 @@ const { Server } = require("socket.io");
 const http = require("http");
 const QRCode = require("qrcode");
 const fs = require("fs");
+const { DateTime } = require("luxon");
 const path = require("path");
 const {
   DisconnectReason,
@@ -53,25 +54,25 @@ const Message = mongoose.model("MessageR", messageSchema);
 
 // Función para guardar el mensaje en MongoDB
 async function saveMessage(instanceId, senderNumber, message, messageType) {
-  // Obtener la fecha actual en la zona horaria de Lima
-  const limaDate = new Date(
-    new Date().toLocaleString("es-PE", { timeZone: "America/Lima" })
-  );
-
-  // Convertir la fecha a UTC antes de guardarla
-  const utcDate = limaDate.toISOString(); // Esto devuelve la fecha en formato UTC
-
-  // Crear un nuevo mensaje con ambas fechas
-  const newMessage = new Message({
-    instanceId,
-    senderNumber,
-    message,
-    messageType,
-    timestamp: utcDate, // Guardar la fecha en formato UTC
-    timestampLima: limaDate, // Guardar la fecha ajustada a Lima
-  });
-
   try {
+    // Obtener la fecha actual en UTC
+    const utcDate = new Date();
+
+    // Obtener la fecha actual ajustada a la zona horaria de Lima
+    const limaDate = DateTime.fromJSDate(utcDate, {
+      zone: "America/Lima",
+    }).toJSDate();
+
+    // Crear un nuevo mensaje con ambas fechas
+    const newMessage = new Message({
+      instanceId,
+      senderNumber,
+      message,
+      messageType,
+      timestamp: utcDate, // Guardar la fecha en UTC
+      timestampLima: limaDate, // Guardar la fecha ajustada a Lima
+    });
+
     await newMessage.save();
     console.log(
       `Mensaje guardado para la instancia ${instanceId} de ${senderNumber}`
