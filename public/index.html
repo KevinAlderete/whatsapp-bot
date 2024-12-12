@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <title>Gestión de Instancias</title>
+  </head>
+  <body class="bg-gray-100 p-5">
+    <div class="max-w-4xl mx-auto">
+      <h1 class="text-2xl font-bold mb-5">Gestión de Instancias</h1>
+      <div id="instances" class="space-y-4"></div>
+      <div class="mt-5">
+        <input
+          id="newInstanceId"
+          type="text"
+          class="border rounded p-2 w-full"
+          placeholder="ID de nueva instancia"
+        />
+        <button
+          onclick="startInstance()"
+          class="bg-blue-500 text-white px-4 py-2 rounded mt-2 w-full"
+        >
+          Iniciar Nueva Instancia
+        </button>
+      </div>
+    </div>
+
+    <script>
+      const socket = io();
+
+      const instancesDiv = document.getElementById("instances");
+
+      // Recuperar instancias existentes al cargar
+      fetch("/instances")
+        .then((response) => response.json())
+        .then((instances) => {
+          instances.forEach((instance) => {
+            addInstance(instance.id, instance.connected);
+          });
+        });
+
+      // Manejo de WebSocket
+      socket.on("qr", ({ instanceId, qr }) => {
+        const qrImage = document.getElementById(`qr-${instanceId}`);
+        if (qrImage) qrImage.src = qr;
+      });
+
+      socket.on("connected", ({ instanceId }) => {
+        updateInstanceStatus(instanceId, true);
+      });
+
+      socket.on("logout", ({ instanceId }) => {
+        updateInstanceStatus(instanceId, false);
+      });
+
+      // Escuchar los mensajes y mostrarlos en la interfaz
+      socket.on("message", ({ instanceId, message }) => {
+        const instanceDiv = document.getElementById(`instance-${instanceId}`);
+        if (instanceDiv) {
+          const messagesDiv = instanceDiv.querySelector(".messages");
+          const messageElement = document.createElement("p");
+          messageElement.textContent = message;
+          messagesDiv.appendChild(messageElement);
+        }
+      });
+
+      // Función para iniciar una nueva instancia
+      function startInstance() {
+        const id = document.getElementById("newInstanceId").value.trim();
+        if (!id) return alert("ID no puede estar vacío");
+
+        fetch(`/instances/${id}/start`, { method: "POST" }).then((response) => {
+          if (response.ok) {
+            addInstance(id, false);
+          } else {
+            alert("Error al iniciar la instancia");
+          }
+        });
+      }
+
+      // Función para agregar una instancia
+      function addInstance(instanceId, connected) {
+        const instanceDiv = document.createElement("div");
+        instanceDiv.id = `instance-${instanceId}`;
+        instanceDiv.className = `p-4 rounded shadow ${
+          connected ? "bg-green-100" : "bg-white"
+        }`;
+
+        instanceDiv.innerHTML = `
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-bold">${instanceId}</h2>
+          <button
+            onclick="logoutInstance('${instanceId}')"
+            class="bg-red-500 text-white px-4 py-2 rounded"
+          >
+            Cerrar Sesión
+          </button>
+        </div>
+        <p class="text-sm">Estado: <span id="status-${instanceId}">${
+          connected ? "Conectado" : "Desconectado"
+        }</span></p>
+        <img
+          id="qr-${instanceId}"
+          class="mt-3 w-32 h-32 ${
+            connected ? "opacity-50" : "opacity-100"
+          } transition-opacity"
+        />
+        <div class="messages mt-3"></div>
+      `;
+        instancesDiv.appendChild(instanceDiv);
+      }
+
+      // Función para actualizar estado de conexión
+      function updateInstanceStatus(instanceId, connected) {
+        const statusSpan = document.getElementById(`status-${instanceId}`);
+        const qrImage = document.getElementById(`qr-${instanceId}`);
+        const instanceDiv = document.getElementById(`instance-${instanceId}`);
+
+        if (statusSpan)
+          statusSpan.textContent = connected ? "Conectado" : "Desconectado";
+        if (qrImage) qrImage.classList.toggle("opacity-50", connected);
+        if (instanceDiv)
+          instanceDiv.classList.toggle("bg-green-100", connected);
+      }
+
+      // Función para cerrar sesión
+      function logoutInstance(instanceId) {
+        fetch(`/instances/${instanceId}/logout`, { method: "POST" }).then(
+          (response) => {
+            if (response.ok) {
+              updateInstanceStatus(instanceId, false);
+            } else {
+              alert("Error al cerrar sesión");
+            }
+          }
+        );
+      }
+    </script>
+  </body>
+</html>
