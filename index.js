@@ -6,6 +6,7 @@ const http = require("http");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const { DateTime } = require("luxon");
+const XLSX = require("xlsx");
 const path = require("path");
 const {
   DisconnectReason,
@@ -29,10 +30,7 @@ const sessions = {}; // Objeto para almacenar sesiones activas
 
 // Conexión a MongoDB
 mongoose
-  .connect(process.env.MONGODB_URL, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(process.env.MONGODB_URL)
   .then(() => {
     console.log("Conectado a MongoDB");
   })
@@ -48,6 +46,8 @@ const messageSchema = new mongoose.Schema({
   messageType: { type: String, enum: ["sent", "received"], required: true }, // Tipo de mensaje (enviado o recibido)
   timestamp: { type: Date, default: Date.now },
   timestampLima: { type: Date, required: true },
+  hourUTC: { type: String, required: true }, // Campo adicional para la hora en UTC
+  hourLima: { type: String, required: true }, // Campo adicional para la hora en Lima
 });
 
 const Message = mongoose.model("MessageR", messageSchema);
@@ -63,7 +63,11 @@ async function saveMessage(instanceId, senderNumber, message, messageType) {
       zone: "America/Lima",
     }).toJSDate();
 
-    // Crear un nuevo mensaje con ambas fechas
+    // Extraer solo la hora en formato de 24 horas
+    const hourUTC = DateTime.fromJSDate(utcDate).toFormat("HH:mm"); // Hora en UTC
+    const hourLima = DateTime.fromJSDate(limaDate).toFormat("HH:mm"); // Hora en Lima
+
+    // Crear un nuevo mensaje con ambas fechas y horas
     const newMessage = new Message({
       instanceId,
       senderNumber,
@@ -71,6 +75,8 @@ async function saveMessage(instanceId, senderNumber, message, messageType) {
       messageType,
       timestamp: utcDate, // Guardar la fecha en UTC
       timestampLima: limaDate, // Guardar la fecha ajustada a Lima
+      hourUTC, // Guardar solo la hora en UTC
+      hourLima, // Guardar solo la hora en Lima
     });
 
     await newMessage.save();
@@ -128,17 +134,50 @@ async function initializeSession(instanceId) {
   sock.ev.on("messages.upsert", async (m) => {
     const { messages } = m;
     messages.forEach(async (msg) => {
-      const message = msg?.message?.conversation;
-      const senderNumber = msg.key.remoteJid; // Número de quien envió el mensaje
-      const messageType = "received"; // Tipo de mensaje
+      const messageType = msg.key.fromMe ? "sent" : "received"; // Determina si es enviado o recibido
 
-      if (message) {
-        console.log(
-          `Mensaje recibido en la instancia ${instanceId} de ${senderNumber}: ${message}`
-        );
-        // Guardar el mensaje en MongoDB
-        await saveMessage(instanceId, senderNumber, message, messageType);
+      // Determinar el contenido del mensaje según el tipo
+      let message = "";
+      const msgType = Object.keys(msg.message)[0];
+
+      switch (msgType) {
+        case "conversation":
+          message = msg.message.conversation;
+          break;
+        case "extendedTextMessage":
+          message = msg.message.extendedTextMessage.text;
+          break;
+        case "imageMessage":
+          message = msg.message.imageMessage.caption || "[Imagen sin texto]";
+          break;
+        case "videoMessage":
+          message = "[Video]";
+          break;
+        case "documentMessage":
+          message =
+            "[Documento: " +
+            (msg.message.documentMessage.title || "sin título") +
+            "]";
+          break;
+        case "audioMessage":
+          message = "[Audio]";
+          break;
+        case "stickerMessage":
+          message = "[Sticker]";
+          break;
+        default:
+          message = "[Mensaje no soportado]";
       }
+
+      const senderNumber = msg.key.remoteJid; // Número de quien envió el mensaje
+
+      // Registrar en consola
+      console.log(
+        `Mensaje ${messageType} en la instancia ${instanceId}: ${senderNumber} -> ${message}`
+      );
+
+      // Guardar el mensaje en MongoDB
+      await saveMessage(instanceId, senderNumber, message, messageType);
     });
   });
 
@@ -207,6 +246,55 @@ async function sendMessage(instanceId, recipientNumber, message) {
     await saveMessage(instanceId, recipientNumber, message, "sent");
   }
 }
+
+// Ruta para exportar los mensajes a un archivo Excel
+app.get("/export-messages", async (req, res) => {
+  try {
+    // Obtener los mensajes de la base de datos
+    const messages = await Message.find({});
+
+    // Si no hay mensajes, enviar una respuesta adecuada
+    if (messages.length === 0) {
+      return res.status(404).send("No hay mensajes para exportar.");
+    }
+
+    // Transformar los mensajes a un formato adecuado para Excel
+    const data = messages.map((msg) => ({
+      "ID de Instancia": msg.instanceId,
+      "Número del Remitente": msg.senderNumber,
+      Mensaje: msg.message,
+      "Tipo de Mensaje": msg.messageType,
+      "Fecha (UTC)": msg.timestamp,
+      "Fecha (Lima)": msg.timestampLima,
+      "Hora (UTC)": msg.hourUTC,
+      "Hora (Lima)": msg.hourLima,
+    }));
+
+    // Crear una hoja de trabajo de Excel
+    const ws = XLSX.utils.json_to_sheet(data);
+
+    // Crear un libro de trabajo
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Mensajes");
+
+    // Generar el archivo Excel
+    const filePath = path.join(__dirname, "mensajes.xlsx");
+
+    // Escribir el archivo en el sistema de archivos
+    XLSX.writeFile(wb, filePath);
+
+    // Enviar el archivo Excel como respuesta
+    res.download(filePath, "mensajes.xlsx", (err) => {
+      if (err) {
+        console.error("Error al descargar el archivo Excel:", err);
+        res.status(500).send("Hubo un problema al generar el archivo.");
+      }
+    });
+  } catch (error) {
+    console.error("Error al exportar los mensajes:", error);
+    res.status(500).send("Hubo un problema al exportar los mensajes.");
+  }
+});
 
 // Servidor y sockets
 io.on("connection", (socket) => {

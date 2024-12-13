@@ -24,6 +24,13 @@
         >
           Iniciar Nueva Instancia
         </button>
+        <!-- Botón para descargar los mensajes en formato Excel -->
+        <button
+          id="downloadBtn"
+          class="bg-green-500 text-white px-4 py-2 rounded mt-2 w-full"
+        >
+          Descargar Mensajes en Excel
+        </button>
       </div>
     </div>
 
@@ -137,6 +144,30 @@
           }
         );
       }
+
+      document
+        .getElementById("downloadBtn")
+        .addEventListener("click", function () {
+          // Hacer una solicitud GET al backend para obtener el archivo Excel
+          fetch("/export-messages")
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error("No se pudo generar el archivo Excel.");
+              }
+              return response.blob(); // Convertir la respuesta en un Blob
+            })
+            .then((blob) => {
+              // Crear un enlace para descargar el archivo
+              const link = document.createElement("a");
+              link.href = URL.createObjectURL(blob); // Crear un enlace temporal para el archivo
+              link.download = "mensajes.xlsx"; // Nombre del archivo
+              link.click(); // Iniciar la descarga
+            })
+            .catch((error) => {
+              console.error("Error al descargar el archivo Excel:", error);
+              alert("Hubo un error al intentar descargar el archivo.");
+            });
+        });
     </script>
   </body>
 </html>
