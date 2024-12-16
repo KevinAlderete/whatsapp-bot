@@ -1,273 +1,314 @@
-// // Importar módulos necesarios
+// require("dotenv").config();
 // const express = require("express");
-// const xlsx = require("xlsx");
-// const http = require("http");
+// const mongoose = require("mongoose");
 // const { Server } = require("socket.io");
+// const http = require("http");
 // const QRCode = require("qrcode");
 // const fs = require("fs");
+// const { DateTime } = require("luxon");
+// const XLSX = require("xlsx");
 // const path = require("path");
 // const {
 //   DisconnectReason,
 //   useMultiFileAuthState,
 // } = require("@whiskeysockets/baileys");
 // const makeWASocket = require("@whiskeysockets/baileys").default;
-
-// // Variables globales
-// let contador = { enviados: 0, recibidos: 0 };
-// let qrEmitted = false;
-// let sock = null;
-// let isLoggedOut = false;
-// let messagesGroupedByPhone = {}; // Agrupar mensajes por número de teléfono
+// const cors = require("cors"); // Para permitir solicitudes del frontend
 
 // // Configuración del servidor
 // const app = express();
 // const server = http.createServer(app);
 // const io = new Server(server);
-// const PORT = 3000;
+// const PORT = process.env.PORT || 3000;
 
-// // Configuración de Express
+// app.use(cors()); // Habilitar CORS
 // app.use(express.static("public"));
-// app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-// app.get("/download-messages", handleDownloadLog);
-// app.get("/download-excel", handleDownloadExcel);
-// // Nueva ruta para eliminar el historial
-// app.post("/clear-messages-log", clearMessagesLog);
+// app.use(express.json()); // Permitir solicitudes JSON
 
-// // Función: Descargar archivo de registro (JSON)
-// function handleDownloadLog(req, res) {
-//   const messagesLogPath = path.join(__dirname, "messages_grouped_log.json");
-//   if (fs.existsSync(messagesLogPath)) {
-//     res.download(messagesLogPath, "messages_grouped_log.json", (err) => {
-//       if (err) {
-//         console.error("Error al descargar el archivo", err);
-//         res.status(500).send("No se pudo descargar el archivo.");
-//       }
-//     });
-//   } else {
-//     res.status(404).send("El archivo de registro no existe.");
-//   }
-// }
-
-// // Función: Descargar archivo Excel
-// function handleDownloadExcel(req, res) {
-//   const excelFilePath = path.join(__dirname, "messages_log.xlsx");
-
-//   // Generar el archivo Excel con los datos actualizados
-//   saveMessagesToExcel(messagesGroupedByPhone, excelFilePath);
-
-//   // Descargar el archivo actualizado
-//   res.download(excelFilePath, "messages_log.xlsx", (err) => {
-//     if (err) {
-//       console.error("Error al descargar el archivo Excel", err);
-//       res.status(500).send("No se pudo descargar el archivo Excel.");
-//     }
+// // Conexión a MongoDB
+// mongoose
+//   .connect(process.env.MONGODB_URL)
+//   .then(() => {
+//     console.log("Conectado a MongoDB");
+//   })
+//   .catch((err) => {
+//     console.error("Error al conectar a MongoDB", err);
 //   });
-// }
 
-// // Función para generar el archivo Excel a partir de los mensajes agrupados por número
-// function saveMessagesToExcel(messagesGroupedByPhone, filePath) {
-//   // Convertir los mensajes agrupados en un formato adecuado para el Excel
-//   let allMessages = [];
-//   for (const phoneNumber in messagesGroupedByPhone) {
-//     const groupedMessages = messagesGroupedByPhone[phoneNumber];
-//     allMessages = allMessages.concat(groupedMessages);
-//   }
+// // Definir el esquema y modelo para las sesiones
+// const sessionSchema = new mongoose.Schema({
+//   instanceId: { type: String, required: true, unique: true },
+//   connected: { type: Boolean, default: false },
+//   qr: { type: String, default: null }, // QR solo se envía a través de WebSocket
+//   createdAt: { type: Date, default: Date.now },
+// });
 
-//   // Agregar ID, Enviado/Recibido y formato de mensaje
-//   const messagesWithDetails = allMessages.map((msg, index) => ({
-//     ID: index + 1, // ID único basado en el índice (comienza en 1)
-//     Numero: msg.phoneNumber,
-//     Mensaje: msg.message,
-//     Fecha: msg.date,
-//     Hora: msg.time,
-//     EnviadoRecibido: msg.fromMe ? "Enviado" : "Recibido",
-//   }));
+// const Session = mongoose.model("Session", sessionSchema);
 
-//   const worksheet = xlsx.utils.json_to_sheet(messagesWithDetails);
-//   const workbook = xlsx.utils.book_new();
-//   xlsx.utils.book_append_sheet(workbook, worksheet, "Mensajes");
+// // Definir el esquema y modelo para los mensajes
+// const messageSchema = new mongoose.Schema({
+//   instanceId: { type: String, required: true },
+//   senderNumber: { type: String, required: true },
+//   message: { type: String, required: true },
+//   messageType: { type: String, enum: ["sent", "received"], required: true },
+//   timestamp: { type: Date, default: Date.now },
+//   timestampLima: { type: Date, required: true },
+//   hourUTC: { type: String, required: true },
+//   hourLima: { type: String, required: true },
+// });
 
-//   // Escribir el archivo Excel
-//   xlsx.writeFile(workbook, filePath);
-// }
+// const Message = mongoose.model("MessageR", messageSchema);
 
-// // Función para eliminar todo el historial de mensajes registrados
-// function clearMessagesLog(req, res) {
+// // Función para guardar el mensaje en MongoDB
+// async function saveMessage(instanceId, senderNumber, message, messageType) {
 //   try {
-//     // Resetear la variable global
-//     messagesGroupedByPhone = {};
+//     const utcDate = new Date();
+//     const limaDate = DateTime.fromJSDate(utcDate, {
+//       zone: "America/Lima",
+//     }).toJSDate();
+//     const hourUTC = DateTime.fromJSDate(utcDate).toFormat("HH:mm");
+//     const hourLima = DateTime.fromJSDate(limaDate).toFormat("HH:mm");
 
-//     // Eliminar el archivo de registro si existe
-//     const logFilePath = path.join(__dirname, "messages_grouped_log.json");
-//     if (fs.existsSync(logFilePath)) {
-//       fs.unlinkSync(logFilePath);
-//       console.log("Archivo de registro eliminado.");
-//     }
+//     const newMessage = new Message({
+//       instanceId,
+//       senderNumber,
+//       message,
+//       messageType,
+//       timestamp: utcDate,
+//       timestampLima: limaDate,
+//       hourUTC,
+//       hourLima,
+//     });
 
-//     // Eliminar el archivo Excel si existe
-//     const excelFilePath = path.join(__dirname, "messages_log.xlsx");
-//     if (fs.existsSync(excelFilePath)) {
-//       fs.unlinkSync(excelFilePath);
-//       console.log("Archivo Excel eliminado.");
-//     }
-
-//     // Resetear los contadores
-//     contador = { enviados: 0, recibidos: 0 };
-
-//     // Notificar éxito
-//     io.emit("updateCounters", contador); // Actualizar los contadores en la interfaz
-//     res.status(200).send("Historial de mensajes eliminado exitosamente.");
+//     await newMessage.save();
+//     console.log(
+//       `Mensaje guardado para la instancia ${instanceId} de ${senderNumber}`
+//     );
 //   } catch (error) {
-//     console.error("Error al eliminar el historial de mensajes:", error);
-//     res.status(500).send("Error al eliminar el historial.");
+//     console.error("Error al guardar el mensaje:", error);
 //   }
 // }
 
-// // Lógica de conexión a WhatsApp
-// async function connectionLogic() {
-//   const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
+// // Función para inicializar una nueva instancia de conexión
+// async function initializeSession(instanceId) {
+//   // Verificar si la sesión ya está activa
+//   const existingSession = await Session.findOne({
+//     instanceId,
+//     connected: true,
+//   });
 
-//   sock = makeWASocket({
+//   if (existingSession) {
+//     console.log(`La instancia ${instanceId} ya está activa.`);
+//     return; // Evitar iniciar una nueva sesión si ya está activa
+//   }
+
+//   const { state, saveCreds } = await useMultiFileAuthState(
+//     `sessions/${instanceId}`
+//   );
+
+//   const sock = makeWASocket({
 //     printQRInTerminal: true,
 //     auth: state,
 //   });
 
-//   // Eventos de actualización de conexión
-//   sock.ev.on("connection.update", handleConnectionUpdate);
-//   sock.ev.on("messages.upsert", handleMessageUpsert);
-//   sock.ev.on("creds.update", saveCreds);
-// }
+//   sock.ev.on("connection.update", async (update) => {
+//     const { connection, lastDisconnect, qr } = update;
 
-// // Manejar actualizaciones de conexión
-// async function handleConnectionUpdate(update) {
-//   const { connection, lastDisconnect, qr } = update || {};
+//     if (qr) {
+//       console.log(`QR generado para la instancia: ${instanceId}`);
+//       const qrCodeURL = await QRCode.toDataURL(qr);
+//       io.emit("qr", { instanceId, qr: qrCodeURL });
 
-//   if (qr && !qrEmitted) {
-//     qrEmitted = true;
-//     console.log("Generando código QR para conexión...");
-//     const qrCodeURL = await QRCode.toDataURL(qr);
-//     io.emit("qr", qrCodeURL);
-//   }
-
-//   if (connection === "close") {
-//     const shouldReconnect =
-//       lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-
-//     if (
-//       lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut
-//     ) {
-//       isLoggedOut = true;
-//       console.log("Sesión cerrada intencionalmente.");
-//       io.emit("logout");
-//     } else if (!isLoggedOut && shouldReconnect) {
-//       console.log("Intentando reconectar...");
-//       connectionLogic();
-//     } else {
-//       console.log("Sesión cerrada, escanea nuevamente el QR.");
-//       io.emit("logout");
-//     }
-//   } else if (connection === "open") {
-//     console.log("¡Conexión establecida!");
-//     io.emit("connected");
-//   }
-// }
-
-// // Manejar mensajes entrantes y agruparlos por número de teléfono
-// function handleMessageUpsert(messageUpdate) {
-//   const messages = messageUpdate.messages || [];
-//   messages.forEach((msg) => {
-//     try {
-//       const {
-//         key,
-//         message,
-//         key: { fromMe },
-//         messageTimestamp,
-//       } = msg;
-
-//       const phoneNumber = key.remoteJid || "Número desconocido";
-
-//       // Incrementar contadores según sea enviado o recibido
-//       if (fromMe) {
-//         contador.enviados += 1;
-//       } else {
-//         contador.recibidos += 1;
-//       }
-
-//       io.emit("updateCounters", contador);
-
-//       // Manejar contenido del mensaje de forma segura
-//       const messageContent =
-//         message?.conversation ||
-//         message?.extendedTextMessage?.text ||
-//         message?.imageMessage?.caption ||
-//         message?.videoMessage?.caption ||
-//         "[Mensaje sin texto]";
-
-//       const messageData = {
-//         fromMe,
-//         phoneNumber,
-//         message: messageContent,
-//         timestamp: messageTimestamp || Date.now() / 1000,
-//         date: new Date(
-//           (messageTimestamp || Date.now() / 1000) * 1000
-//         ).toLocaleDateString(),
-//         time: new Date(
-//           (messageTimestamp || Date.now() / 1000) * 1000
-//         ).toLocaleTimeString(),
-//       };
-
-//       // Agrupar mensajes por número de teléfono
-//       if (!messagesGroupedByPhone[phoneNumber]) {
-//         messagesGroupedByPhone[phoneNumber] = [];
-//       }
-//       messagesGroupedByPhone[phoneNumber].push(messageData);
-
-//       // Guardar el registro agrupado
-//       fs.writeFileSync(
-//         "messages_grouped_log.json",
-//         JSON.stringify(messagesGroupedByPhone, null, 2)
+//       // Actualizar o crear la sesión en la base de datos
+//       await Session.findOneAndUpdate(
+//         { instanceId },
+//         { connected: false, qr: qrCodeURL },
+//         { upsert: true }
 //       );
-//     } catch (error) {
-//       console.error("Error procesando un mensaje:", error);
+//     }
+
+//     if (connection === "close") {
+//       const shouldReconnect =
+//         lastDisconnect?.error?.output?.statusCode !==
+//         DisconnectReason.loggedOut;
+
+//       if (shouldReconnect) {
+//         console.log(`Reconectando la instancia: ${instanceId}`);
+//         initializeSession(instanceId); // Reintentar la conexión
+//       } else {
+//         console.log(`Sesión cerrada para la instancia: ${instanceId}`);
+//         io.emit("logout", { instanceId });
+
+//         // Eliminar la sesión de la base de datos
+//         await Session.deleteOne({ instanceId });
+//       }
+//     }
+
+//     if (connection === "open") {
+//       console.log(`Instancia conectada: ${instanceId}`);
+//       io.emit("connected", { instanceId });
+
+//       // Actualizar la sesión en la base de datos
+//       await Session.findOneAndUpdate(
+//         { instanceId },
+//         { connected: true, qr: null }
+//       );
 //     }
 //   });
-// }
 
-// // Funciones para cerrar sesión y reconectar
-// function closeConnection() {
-//   if (sock) {
-//     sock.logout();
-//     console.log("Sesión cerrada manualmente.");
-//     isLoggedOut = true;
-//     io.emit("logout");
-//     qrEmitted = false;
+//   sock.ev.on("messages.upsert", async (m) => {
+//     const { messages } = m;
+//     messages.forEach(async (msg) => {
+//       const messageType = msg.key.fromMe ? "sent" : "received";
 
-//     const authPath = path.join(__dirname, "auth_info_baileys");
-//     fs.rm(authPath, { recursive: true, force: true }, (err) => {
-//       if (err) console.error("Error al eliminar la sesión:", err);
-//       else console.log("Sesión eliminada correctamente.");
+//       let message = "";
+//       const msgType = Object.keys(msg.message)[0];
+
+//       switch (msgType) {
+//         case "conversation":
+//           message = msg.message.conversation;
+//           break;
+//         case "extendedTextMessage":
+//           message = msg.message.extendedTextMessage.text;
+//           break;
+//         case "imageMessage":
+//           message = msg.message.imageMessage.caption || "[Imagen sin texto]";
+//           break;
+//         case "videoMessage":
+//           message = "[Video]";
+//           break;
+//         case "documentMessage":
+//           message =
+//             "[Documento: " +
+//             (msg.message.documentMessage.title || "sin título") +
+//             "]";
+//           break;
+//         case "audioMessage":
+//           message = "[Audio]";
+//           break;
+//         case "stickerMessage":
+//           message = "[Sticker]";
+//           break;
+//         default:
+//           message = "[Mensaje no soportado]";
+//       }
+
+//       const senderNumber = msg.key.remoteJid;
+
+//       console.log(
+//         `Mensaje ${messageType} en la instancia ${instanceId}: ${senderNumber} -> ${message}`
+//       );
+
+//       await saveMessage(instanceId, senderNumber, message, messageType);
 //     });
-//   }
+//   });
+
+//   sock.ev.on("creds.update", saveCreds);
+
+//   // Guardar la sesión en la base de datos al iniciar
+//   const session = new Session({
+//     instanceId,
+//     connected: false,
+//   });
+//   await session.save();
+
+//   return sock;
 // }
 
-// function reconnect() {
-//   if (isLoggedOut) {
-//     isLoggedOut = false;
-//     qrEmitted = false;
-//     connectionLogic();
-//   } else {
-//     console.log("No se puede reconectar sin cerrar sesión primero.");
-//   }
-// }
-
-// // Configuración de WebSocket
-// io.on("connection", (socket) => {
-//   socket.on("closeConnection", closeConnection);
-//   socket.on("reconnect", reconnect);
+// // Rutas del backend
+// app.get("/instances", async (req, res) => {
+//   const activeSessions = await Session.find({});
+//   res.json(activeSessions);
 // });
 
-// // Iniciar conexión y servidor
-// connectionLogic();
+// app.post("/instances/:id/start", async (req, res) => {
+//   const { id } = req.params;
+
+//   const existingSession = await Session.findOne({ instanceId: id });
+
+//   if (existingSession) {
+//     return res.status(400).send("La instancia ya está activa.");
+//   }
+
+//   await initializeSession(id);
+//   res.json({ message: "Instancia iniciada." });
+// });
+
+// // Ruta para cerrar sesión y eliminarla
+// app.post("/instances/:id/logout", async (req, res) => {
+//   const { id } = req.params;
+
+//   const session = await Session.findOne({ instanceId: id });
+
+//   if (!session) {
+//     return res.status(404).send("Instancia no encontrada.");
+//   }
+
+//   try {
+//     // Aquí se pueden agregar otros procesos de cierre si es necesario.
+//     await Session.deleteOne({ instanceId: id });
+
+//     res.json({ message: "Sesión cerrada y eliminada." });
+//   } catch (error) {
+//     console.error("Error al cerrar la sesión:", error);
+//     res.status(500).send("Hubo un problema al cerrar la sesión.");
+//   }
+// });
+
+// // Ruta para exportar los mensajes a un archivo Excel
+// app.get("/export-messages", async (req, res) => {
+//   try {
+//     // Obtener los mensajes de la base de datos
+//     const messages = await Message.find({});
+
+//     // Si no hay mensajes, enviar una respuesta adecuada
+//     if (messages.length === 0) {
+//       return res.status(404).send("No hay mensajes para exportar.");
+//     }
+
+//     // Transformar los mensajes a un formato adecuado para Excel
+//     const data = messages.map((msg) => ({
+//       "ID de Instancia": msg.instanceId,
+//       "Número del Remitente": msg.senderNumber,
+//       Mensaje: msg.message,
+//       "Tipo de Mensaje": msg.messageType,
+//       "Fecha (UTC)": msg.timestamp,
+//       "Fecha (Lima)": msg.timestampLima,
+//       "Hora (UTC)": msg.hourUTC,
+//       "Hora (Lima)": msg.hourLima,
+//     }));
+
+//     // Crear una hoja de trabajo de Excel
+//     const ws = XLSX.utils.json_to_sheet(data);
+
+//     // Crear un libro de trabajo
+//     const wb = XLSX.utils.book_new();
+//     XLSX.utils.book_append_sheet(wb, ws, "Mensajes");
+
+//     // Generar el archivo Excel
+//     const filePath = path.join(__dirname, "mensajes.xlsx");
+
+//     // Escribir el archivo en el sistema de archivos
+//     XLSX.writeFile(wb, filePath);
+
+//     // Enviar el archivo Excel como respuesta
+//     res.download(filePath, "mensajes.xlsx", (err) => {
+//       if (err) {
+//         console.error("Error al descargar el archivo Excel:", err);
+//         res.status(500).send("Hubo un problema al generar el archivo.");
+//       }
+//     });
+//   } catch (error) {
+//     console.error("Error al exportar los mensajes:", error);
+//     res.status(500).send("Hubo un problema al exportar los mensajes.");
+//   }
+// });
+
+// // Servidor y sockets
+// io.on("connection", (socket) => {
+//   console.log("Cliente conectado al WebSocket");
+// });
+
 // server.listen(PORT, () => {
-//   console.log(`Servidor ejecutándose en http://localhost:${PORT}`);
+//   console.log(`Servidor escuchando en http://localhost:${PORT}`);
 // });

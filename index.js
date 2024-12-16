@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 const http = require("http");
 const QRCode = require("qrcode");
-const fs = require("fs");
+const fs = require("fs").promises;
 const { DateTime } = require("luxon");
 const XLSX = require("xlsx");
 const path = require("path");
@@ -13,70 +13,53 @@ const {
   useMultiFileAuthState,
 } = require("@whiskeysockets/baileys");
 const makeWASocket = require("@whiskeysockets/baileys").default;
-const cors = require("cors"); // Para permitir solicitudes del frontend
+const cors = require("cors");
 
-// Configuración del servidor
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 
-app.use(cors()); // Habilitar CORS
+app.use(cors());
 app.use(express.static("public"));
-app.use(express.json()); // Permitir solicitudes JSON
+app.use(express.json());
 
-// Manejador de sesiones por instancia
-const sessions = {}; // Objeto para almacenar sesiones activas
+// Manejador de sesiones
+const sessions = {};
 
-// Conexión a MongoDB
+// Conexión a MongoDB con reconexión automática
 mongoose
   .connect(process.env.MONGODB_URL)
-  .then(() => {
-    console.log("Conectado a MongoDB");
-  })
-  .catch((err) => {
-    console.error("Error al conectar a MongoDB", err);
-  });
+  .then(() => console.log("Conectado a MongoDB"))
+  .catch((err) => console.error("Error al conectar a MongoDB", err));
 
-// Definir el esquema y modelo para los mensajes
 const messageSchema = new mongoose.Schema({
   instanceId: { type: String, required: true },
-  senderNumber: { type: String, required: true }, // Número de quien envía el mensaje
+  senderNumber: { type: String, required: true },
   message: { type: String, required: true },
-  messageType: { type: String, enum: ["sent", "received"], required: true }, // Tipo de mensaje (enviado o recibido)
+  messageType: { type: String, enum: ["sent", "received"], required: true },
   timestamp: { type: Date, default: Date.now },
   timestampLima: { type: Date, required: true },
-  hourUTC: { type: String, required: true }, // Campo adicional para la hora en UTC
-  hourLima: { type: String, required: true }, // Campo adicional para la hora en Lima
+  hour: { type: String, required: true },
 });
 
 const Message = mongoose.model("MessageR", messageSchema);
 
-// Función para guardar el mensaje en MongoDB
 async function saveMessage(instanceId, senderNumber, message, messageType) {
   try {
-    // Obtener la fecha actual en UTC
     const utcDate = new Date();
+    const limaDateTime = DateTime.fromJSDate(utcDate, { zone: "America/Lima" });
+    const timestampLima = limaDateTime.toJSDate();
+    const hourLima = limaDateTime.toFormat("HH:mm");
 
-    // Obtener la fecha actual ajustada a la zona horaria de Lima
-    const limaDate = DateTime.fromJSDate(utcDate, {
-      zone: "America/Lima",
-    }).toJSDate();
-
-    // Extraer solo la hora en formato de 24 horas
-    const hourUTC = DateTime.fromJSDate(utcDate).toFormat("HH:mm"); // Hora en UTC
-    const hourLima = DateTime.fromJSDate(limaDate).toFormat("HH:mm"); // Hora en Lima
-
-    // Crear un nuevo mensaje con ambas fechas y horas
     const newMessage = new Message({
       instanceId,
       senderNumber,
       message,
       messageType,
-      timestamp: utcDate, // Guardar la fecha en UTC
-      timestampLima: limaDate, // Guardar la fecha ajustada a Lima
-      hourUTC, // Guardar solo la hora en UTC
-      hourLima, // Guardar solo la hora en Lima
+      timestamp: utcDate,
+      timestampLima,
+      hour: hourLima,
     });
 
     await newMessage.save();
@@ -88,18 +71,12 @@ async function saveMessage(instanceId, senderNumber, message, messageType) {
   }
 }
 
-// Función para inicializar una nueva instancia de conexión
 async function initializeSession(instanceId) {
   const { state, saveCreds } = await useMultiFileAuthState(
     `sessions/${instanceId}`
   );
+  const sock = makeWASocket({ printQRInTerminal: true, auth: state });
 
-  const sock = makeWASocket({
-    printQRInTerminal: true,
-    auth: state,
-  });
-
-  // Manejo de eventos de conexión
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -113,14 +90,13 @@ async function initializeSession(instanceId) {
       const shouldReconnect =
         lastDisconnect?.error?.output?.statusCode !==
         DisconnectReason.loggedOut;
-
       if (shouldReconnect) {
         console.log(`Reconectando la instancia: ${instanceId}`);
         initializeSession(instanceId);
       } else {
         console.log(`Sesión cerrada para la instancia: ${instanceId}`);
         io.emit("logout", { instanceId });
-        delete sessions[instanceId]; // Eliminar sesión de la memoria
+        delete sessions[instanceId];
       }
     }
 
@@ -130,13 +106,10 @@ async function initializeSession(instanceId) {
     }
   });
 
-  // Evento de mensaje entrante
   sock.ev.on("messages.upsert", async (m) => {
     const { messages } = m;
-    messages.forEach(async (msg) => {
-      const messageType = msg.key.fromMe ? "sent" : "received"; // Determina si es enviado o recibido
-
-      // Determinar el contenido del mensaje según el tipo
+    for (const msg of messages) {
+      const messageType = msg.key.fromMe ? "sent" : "received";
       let message = "";
       const msgType = Object.keys(msg.message)[0];
 
@@ -154,10 +127,9 @@ async function initializeSession(instanceId) {
           message = "[Video]";
           break;
         case "documentMessage":
-          message =
-            "[Documento: " +
-            (msg.message.documentMessage.title || "sin título") +
-            "]";
+          message = `[Documento: ${
+            msg.message.documentMessage.title || "sin título"
+          }]`;
           break;
         case "audioMessage":
           message = "[Audio]";
@@ -169,83 +141,57 @@ async function initializeSession(instanceId) {
           message = "[Mensaje no soportado]";
       }
 
-      const senderNumber = msg.key.remoteJid; // Número de quien envió el mensaje
-
-      // Registrar en consola
+      const senderNumber = msg.key.remoteJid;
       console.log(
         `Mensaje ${messageType} en la instancia ${instanceId}: ${senderNumber} -> ${message}`
       );
-
-      // Guardar el mensaje en MongoDB
       await saveMessage(instanceId, senderNumber, message, messageType);
-    });
+    }
   });
 
   sock.ev.on("creds.update", saveCreds);
-  sessions[instanceId] = sock; // Guardar la sesión activa
+  sessions[instanceId] = sock;
 }
 
-// Rutas del backend
 app.get("/instances", (req, res) => {
   const activeSessions = Object.keys(sessions).map((id) => ({
     id,
     connected: sessions[id]?.connection === "open",
-    qr: null, // El QR se envía por WebSocket
+    qr: null,
   }));
   res.json(activeSessions);
 });
 
 app.post("/instances/:id/start", async (req, res) => {
   const { id } = req.params;
-
   if (sessions[id]) {
     return res.status(400).send("La instancia ya está activa.");
   }
-
   await initializeSession(id);
   res.json({ message: "Instancia iniciada." });
 });
 
-// Ruta para cerrar sesión y eliminarla
 app.post("/instances/:id/logout", async (req, res) => {
   const { id } = req.params;
   const session = sessions[id];
-
   if (!session) {
     return res.status(404).send("Instancia no encontrada.");
   }
 
   try {
-    // Cerrar sesión y eliminar sesión de la memoria
     await session.logout();
     delete sessions[id];
-
-    // Eliminar el archivo de sesión en el sistema de archivos
     const sessionPath = path.join(__dirname, `sessions/${id}`);
-    if (fs.existsSync(sessionPath)) {
-      fs.rmdirSync(sessionPath, { recursive: true });
+    if (await fs.exists(sessionPath)) {
+      await fs.rmdir(sessionPath, { recursive: true });
       console.log(`Se eliminó la sesión del sistema de archivos: ${id}`);
     }
-
     res.json({ message: "Sesión cerrada y eliminada." });
   } catch (error) {
     console.error("Error al cerrar la sesión:", error);
     res.status(500).send("Hubo un problema al cerrar la sesión.");
   }
 });
-
-// Función para enviar mensajes (enviar mensaje, guardar en base de datos)
-async function sendMessage(instanceId, recipientNumber, message) {
-  const sock = sessions[instanceId];
-  if (sock) {
-    await sock.sendMessage(recipientNumber, { text: message });
-    console.log(
-      `Mensaje enviado desde la instancia ${instanceId} a ${recipientNumber}: ${message}`
-    );
-    // Guardar el mensaje enviado en MongoDB
-    await saveMessage(instanceId, recipientNumber, message, "sent");
-  }
-}
 
 // Ruta para exportar los mensajes a un archivo Excel
 app.get("/export-messages", async (req, res) => {
@@ -264,10 +210,8 @@ app.get("/export-messages", async (req, res) => {
       "Número del Remitente": msg.senderNumber,
       Mensaje: msg.message,
       "Tipo de Mensaje": msg.messageType,
-      "Fecha (UTC)": msg.timestamp,
-      "Fecha (Lima)": msg.timestampLima,
-      "Hora (UTC)": msg.hourUTC,
-      "Hora (Lima)": msg.hourLima,
+      Fecha: msg.timestampLima,
+      Hora: msg.hour,
     }));
 
     // Crear una hoja de trabajo de Excel
